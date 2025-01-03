@@ -148,7 +148,7 @@ struct Button {
   bool is_pressed : 1;
   bool on_press   : 1;
   bool on_release : 1;
-  uint16_t history;
+  uint8_t history;
 };
 
 struct ButtonStruct {
@@ -162,9 +162,9 @@ void process_button(struct Button& btn, bool pin) {
   btn.history <<= 1;
   btn.history |= pin;
   btn.on_press  = (!btn.is_pressed && (btn.history == 0));
-  btn.on_release = (btn.is_pressed && (btn.history == 0xffff));
+  btn.on_release = (btn.is_pressed && (btn.history == 0xff));
   if (btn.history == 0)      btn.is_pressed = true;
-  if (btn.history == 0xffff) btn.is_pressed = false;
+  if (btn.history == 0xff) btn.is_pressed = false;
 }
 
 void process_buttons(struct ButtonStruct& btn) {
