@@ -3,10 +3,6 @@
 #include "tw.h"
 #include "utils.h"
 
-#define OLED_RST_DDR  DDRB
-#define OLED_RST_PORT PORTB
-#define OLED_RST_PIN  DDB2
-
 #define WIDTH 132
 #define HEIGHT 64
 #define PAGES HEIGHT/8
@@ -342,7 +338,6 @@ void oled__data(uint8_t dat) {
 }
 
 void oled_init() {
-  SET(OLED_RST_DDR, OLED_RST_PIN);
   SET(OLED_RST_PORT, OLED_RST_PIN);
   _delay_ms(10);
   CLEAR(OLED_RST_PORT, OLED_RST_PIN);

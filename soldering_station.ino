@@ -1,3 +1,15 @@
+#define BOARD_REV 2
+
+#if BOARD_REV == 2
+#define OLED_RST_PORT PORTB
+#define OLED_RST_PIN  PB2
+#endif  // BOARD_REV == 2
+
+#if BOARD_REV == 3
+#define OLED_RST_PORT PORTB
+#define OLED_RST_PIN  PB4
+#endif  // BOARD_REV == 3
+
 #include "adc.h"
 #include "oled.h"
 #include "tw.h"
@@ -6,12 +18,29 @@
 
 #include <avr/wdt.h>
 
-//void blinky() {
-//  PORTB |= _BV(DDB4);
-//  _delay_ms(10);
-//  PORTB &= ~_BV(DDB4);
-//  _delay_ms(10);
-//}
+#if BOARD_REV == 2
+void io_init() {
+  DDRB  = 0b00000110;
+  DDRC  = 0b00110000;
+  DDRD  = 0b00001111;
+  PORTB = 0b00111001;
+  PORTC = 0b00000100;
+  PORTD = 0b11111111;
+  DIDR0 = 0b00001011;
+}
+#endif  // BOARD_REV == 2
+
+#if BOARD_REV == 3
+void io_init() {
+  DDRB  = 0b00011110;
+  DDRC  = 0b00110000;
+  DDRD  = 0b00000011;
+  PORTB = 0b00001101;
+  PORTC = 0b00000000;
+  PORTD = 0b11111111;
+  DIDR0 = 0b00001111;
+}
+#endif  // BOARD_REV == 3
 
 void pwm_init() {
 /*
@@ -212,22 +241,8 @@ public:
 int main() {
   sei();
 
-  DDRB  |= _BV(DDB5);
-  PORTB &= ~_BV(PB5);
-
   usart_init(3);
-  
   usart_print("\nSoldering Station 245\n");
-  
-  DDRB |= _BV(DDB1);   // Set HEATER_PWM as output
-  //PORTB = _BV(DDB0);  // Set pull-up resistor for SLEEP
-
-  
-  
-  DDRD = 0b00001111;  // Set PD0:3 as output; PD4:7 as input
-  PORTD = _BV(DDD0);  // Set PD0 on to indicate power up
-
-  DIDR0 = 0b00001011;  // Disable digit input for pins ADC0/PC0, ADC1/PC1, ADC3/PC3
 
   pwm_init();
   timer_init();
@@ -265,7 +280,7 @@ int main() {
   //wdt_init();
   adc_start();
 
-  State* state = new StateOff();
+  State* state = new StateWorking();
 
   String serial_input_buffer;
 
@@ -276,7 +291,7 @@ int main() {
 
     if (!usart_busy()) {
       uint8_t ch;
-      while (ch = usart_rx()) {
+      while ((ch = usart_rx())) {
         if (ch == '\r' || ch == '\n') {
           String command = serial_input_buffer;
           command.toUpperCase();
@@ -646,4 +661,11 @@ void wdt_init() {
 //    //seconds++;
 //    //steps++;
 //  }
+//}
+
+//void blinky() {
+//  PORTB |= _BV(DDB4);
+//  _delay_ms(10);
+//  PORTB &= ~_BV(DDB4);
+//  _delay_ms(10);
 //}
