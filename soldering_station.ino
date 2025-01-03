@@ -28,6 +28,12 @@ void io_init() {
   PORTD = 0b11111111;
   DIDR0 = 0b00001011;
 }
+
+#define BTN_FN1 (PIND & _BV(PD4))
+#define BTN_FN2 (PIND & _BV(PD5))
+#define BTN_INC (PIND & _BV(PD6))
+#define BTN_DEC (PIND & _BV(PD7))
+
 #endif  // BOARD_REV == 2
 
 #if BOARD_REV == 3
@@ -40,6 +46,12 @@ void io_init() {
   PORTD = 0b11111111;
   DIDR0 = 0b00001111;
 }
+
+#define BTN_FN1 (PORTD & _BV(PD2))
+#define BTN_FN2 (PORTD & _BV(PD3))
+#define BTN_INC (PORTD & _BV(PD4))
+#define BTN_DEC (PORTD & _BV(PD5))
+
 #endif  // BOARD_REV == 3
 
 void pwm_init() {
@@ -132,6 +144,36 @@ ISR(TIMER2_COMPA_vect) {
 //  pwm_on();
 }
 
+struct Button {
+  bool is_pressed : 1;
+  bool on_press   : 1;
+  bool on_release : 1;
+  uint16_t history;
+};
+
+struct ButtonStruct {
+  Button fn1;
+  Button fn2;
+  Button inc;
+  Button dec;
+};
+
+void process_button(struct Button& btn, bool pin) {
+  btn.history <<= 1;
+  btn.history |= pin;
+  btn.on_press  = (!btn.is_pressed && (btn.history == 0));
+  btn.on_release = (btn.is_pressed && (btn.history == 0xffff));
+  if (btn.history == 0)      btn.is_pressed = true;
+  if (btn.history == 0xffff) btn.is_pressed = false;
+}
+
+void process_buttons(struct ButtonStruct& btn) {
+  process_button(btn.fn1, BTN_FN1);
+  process_button(btn.fn2, BTN_FN2);
+  process_button(btn.inc, BTN_INC);
+  process_button(btn.dec, BTN_DEC);
+}
+
 void draw_power_meter(uint8_t duty) {
   for (int y = 0; y < 44; ++y) {
     oled_pixel(6, y, 1);
@@ -148,15 +190,24 @@ void draw_power_meter(uint8_t duty) {
 
 class State {
 public:
+  virtual ~State() {}
   virtual void draw() = 0;
+  virtual void button(const ButtonStruct& btn) = 0;
+protected:
+  uint16_t set_temperature = 300;
 };
 
 class StateWorking : public State {
 public:
+  ~StateWorking() override {}
   void draw() override {
     uint8_t duty = 75;
+
+    String str_setpoint = "SET ";
+    str_setpoint += set_temperature;
+    str_setpoint += " C";
     
-    oled_string(37, 0, "SET 300 C", 12, 1);
+    oled_string(37, 0, str_setpoint.c_str(), 12, 1);
     oled_string(40, 16, "265", 32, 1);
     oled_string(23, 54, "OFF", 12, 1);
     oled_string(86, 54, "MENU", 12, 1);
@@ -168,10 +219,21 @@ public:
 
     draw_power_meter(duty);
   }
+  void button(const ButtonStruct& btn) {
+    if (btn.inc.on_release) {
+      set_temperature += 5;
+      if (set_temperature > 450) set_temperature = 450;
+    }
+    if (btn.dec.on_release) {
+      set_temperature -= 5;
+      if (set_temperature < 150) set_temperature = 150;
+    }
+  }
 };
 
 class StateSleep : public State {
 public:
+  ~StateSleep() override {}
   void draw() override {
     uint8_t duty = 3;
 
@@ -191,6 +253,7 @@ public:
 
 class StateOff : public State {
 public:
+  ~StateOff() override {}
   void draw() override {
     oled_string(55, 0, "OFF", 12, 1);
     oled_string(40, 16, "265", 32, 1);
@@ -208,6 +271,7 @@ private:
 
 class StateTipChange : public State {
 public:
+  ~StateTipChange() override {}
   void draw() override {
     oled_string(34, 27, "TIP CHANGE", 12, 1);
   }
@@ -215,6 +279,7 @@ public:
 
 class StateNoTip : public State {
 public:
+  ~StateNoTip() override {}
   void draw() override {
     oled_string(46, 27, "NO TIP", 12, 1);
   }
@@ -222,6 +287,7 @@ public:
 
 class StateMenu : public State {
 public:
+  ~StateMenu() override {}
   void draw() override {
     oled_string(40, 0, "SETTINGS", 12, 1);
     oled_string(20, 54, "EXIT", 12, 1);
@@ -251,6 +317,8 @@ int main() {
 
   usart_init(3);
   usart_print("\nSoldering Station 245\n");
+
+  io_init();
 
   pwm_init();
   timer_init();
@@ -292,6 +360,8 @@ int main() {
 
   String serial_input_buffer;
 
+  ButtonStruct btn;
+
   usart_println("RDY");
 
   uint8_t i = 0;
@@ -319,7 +389,8 @@ int main() {
       }
     }
 
-    
+    process_buttons(btn);
+    state->button(btn);
     if (!twi_has_started()) {
       state->draw();
       spinner(i);
