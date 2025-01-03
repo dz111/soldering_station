@@ -238,6 +238,14 @@ public:
   }
 };
 
+void spinner(uint8_t i) {
+  for (int j = 0; j < 16; ++j) {
+    oled_pixel(127-j, 0, 0);
+  }
+  if (i < 8) oled_pixel(127-i, 0, 1);
+  else       oled_pixel(127-15+i, 0, 1);
+}
+
 int main() {
   sei();
 
@@ -286,6 +294,7 @@ int main() {
 
   usart_println("RDY");
 
+  uint8_t i = 0;
   while (1) {
     wdt_reset();
 
@@ -313,8 +322,9 @@ int main() {
     
     if (!twi_has_started()) {
       state->draw();
-
+      spinner(i);
       oled_display();
+      i = (i+1)%16;
     }
   }
 }
