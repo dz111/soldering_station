@@ -14,6 +14,7 @@
 #define MAX_ITER 10
 
 volatile uint8_t oled_buf[WIDTH * HEIGHT / 8];
+const uint16_t _oled_bufsiz = sizeof(oled_buf) / sizeof(*oled_buf);
 
 const uint8_t Font1612[11][32] PROGMEM = 
 {
@@ -326,7 +327,7 @@ const uint8_t Alarm88[8] PROGMEM = //alram
 };
 
 
-bool oled__command(uint8_t cmd) {
+void oled__command(uint8_t cmd) {
   twi_begin(0x3C);
   twi_write(0);
   twi_write(cmd);
@@ -504,11 +505,17 @@ void oled_char(unsigned char x, unsigned char y, char acsii, char size, char mod
     unsigned char i, j, y0=y;
     char temp;
     unsigned char ch = acsii - ' ';
-    for(i = 0;i<size;i++) {
+    int loop = (size==32) ? (size*2) : size;
+    for(i = 0;i<loop;i++) {
         if(size == 12)
         {
             if(mode)temp = pgm_read_byte(&Font1206[ch][i]);
             else temp = ~pgm_read_byte(&Font1206[ch][i]);
+        }
+        else if (size == 32)
+        {
+            if(mode)temp = pgm_read_byte(&Font3216[ch - 0x10][i]);
+            else temp = ~pgm_read_byte(&Font3216[ch - 0x10][i]);
         }
         else 
         {            

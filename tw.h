@@ -2,10 +2,10 @@
 
 /*
   This is a helper library for the AVR two-wire interface (IIC) hardware bus
-  
+
   It supports only master transmit mode at 400 kHz when MCU is operating at 16 MHz.
   (The code for `tw_init` must be modified if not operating under these conditions)
-  
+
   Writes to the slave are buffered, with a maximum of 250 bytes per transmission.
 
   `tw_init` must be called prior to first using the library to initialise internal
@@ -13,11 +13,11 @@
 
   For each transmission, call `tw_start` with the slave's address, then call
   `tw_write` for each byte in the transmission.
-  
+
   Transmissions are initiated when `twi_end` is called and, other than the
   START signal, is executed by an ISR responding to TWINT. This allows the
   remainder of the program to continue executing while the transmission occurs.
-  
+
   Multiple transmissions cannot be buffered. Instead, a call to `twi_start`
   will block until the active transmission is complete. To avoid blocking, the
   user can check `twi_has_started` before initiating a transmission.
@@ -30,7 +30,7 @@
   The user must define an ISR for PCINT0 which is triggered when an error occurs.
   The type of error is stored in twi_error and corresponds to the TWIE_* defines.
   Pin PB5 must be Not Connected to avoid interfering with this interrupt.
- */
+*/
 
 #include "utils.h"
 
@@ -52,7 +52,7 @@ using TwiDelegate = void(*)(uint8_t);
 
 volatile uint8_t twi_buf[TWI_BUF_MAX];
 volatile uint8_t twi_index;
-volatile uint8_t twi_count;
+volatile int8_t twi_count;
 volatile uint8_t twi_address;
 volatile uint8_t twi_error;
 volatile TwiDelegate twi_delegate;
@@ -147,37 +147,37 @@ void twi_end() {
 
 ISR(TWI_vect) {
   switch (TW_STATUS) {
-    
-  // START signal sent; now send slave address
-  case TW_REP_START:
-  case TW_START:
-    {
-      twi__send(twi_address);
-    }
-    break;
 
-  // Received ACK; now send data or STOP signal if at end
-  case TW_MT_SLA_ACK:
-  case TW_MT_DATA_ACK:
-    if (twi_delegate) {
-      twi_delegate(TW_STATUS);
-    } else {
-      if (twi_index >= twi_count) {
+    // START signal sent; now send slave address
+    case TW_REP_START:
+    case TW_START:
+      {
+        twi__send(twi_address);
+      }
+      break;
+
+    // Received ACK; now send data or STOP signal if at end
+    case TW_MT_SLA_ACK:
+    case TW_MT_DATA_ACK:
+      if (twi_delegate) {
+        twi_delegate(TW_STATUS);
+      } else {
+        if (twi_index >= twi_count) {
+          twi__stop();
+          twi__reset();
+        } else {
+          twi__send(twi_buf[twi_index++]);
+        }
+      }
+      break;
+
+    // Transmission failed in some way
+    default:
+      {
         twi__stop();
         twi__reset();
-      } else {
-        twi__send(twi_buf[twi_index++]);
+        twi__error(TW_STATUS);
       }
-    }
-    break;
-
-  // Transmission failed in some way
-  default:
-    {
-      twi__stop();
-      twi__reset();
-      twi__error(TW_STATUS);
-    }
-    break;
+      break;
   }
 }
