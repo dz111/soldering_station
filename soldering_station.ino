@@ -191,7 +191,7 @@ void draw_power_meter(uint8_t duty) {
 class State {
 public:
   virtual ~State() {}
-  virtual void draw() = 0;
+  virtual void draw(const ButtonStruct& btn) = 0;
   virtual void button(const ButtonStruct& btn) = 0;
 protected:
   uint16_t set_temperature = 300;
@@ -200,7 +200,7 @@ protected:
 class StateWorking : public State {
 public:
   ~StateWorking() override {}
-  void draw() override {
+  void draw(const ButtonStruct& btn) override {
     uint8_t duty = 75;
 
     String str_setpoint = "SET ";
@@ -209,8 +209,8 @@ public:
     
     oled_string(37, 0, str_setpoint.c_str(), 12, 1);
     oled_string(40, 16, "265", 32, 1);
-    oled_string(23, 54, "OFF", 12, 1);
-    oled_string(86, 54, "MENU", 12, 1);
+    oled_string(23, 54, "OFF", 12, !btn.fn1.is_pressed);
+    oled_string(86, 54, "MENU", 12, !btn.fn2.is_pressed);
     oled_string(102, 20, "AMB", 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
     
@@ -220,12 +220,12 @@ public:
     draw_power_meter(duty);
   }
   void button(const ButtonStruct& btn) {
-    if (btn.inc.on_release) {
-      set_temperature += 5;
+    if (btn.inc.on_press) {
+      set_temperature += 10;
       if (set_temperature > 450) set_temperature = 450;
     }
-    if (btn.dec.on_release) {
-      set_temperature -= 5;
+    if (btn.dec.on_press) {
+      set_temperature -= 10;
       if (set_temperature < 150) set_temperature = 150;
     }
   }
@@ -234,7 +234,7 @@ public:
 class StateSleep : public State {
 public:
   ~StateSleep() override {}
-  void draw() override {
+  void draw(const ButtonStruct& btn) override {
     uint8_t duty = 3;
 
     oled_string(31, 0, "SLEEP 200 C", 12, 1);
@@ -254,7 +254,7 @@ public:
 class StateOff : public State {
 public:
   ~StateOff() override {}
-  void draw() override {
+  void draw(const ButtonStruct& btn) override {
     oled_string(55, 0, "OFF", 12, 1);
     oled_string(40, 16, "265", 32, 1);
     oled_string(26, 54, "ON", 12, 1);
@@ -272,7 +272,7 @@ private:
 class StateTipChange : public State {
 public:
   ~StateTipChange() override {}
-  void draw() override {
+  void draw(const ButtonStruct& btn) override {
     oled_string(34, 27, "TIP CHANGE", 12, 1);
   }
 };
@@ -280,7 +280,7 @@ public:
 class StateNoTip : public State {
 public:
   ~StateNoTip() override {}
-  void draw() override {
+  void draw(const ButtonStruct& btn) override {
     oled_string(46, 27, "NO TIP", 12, 1);
   }
 };
@@ -288,7 +288,7 @@ public:
 class StateMenu : public State {
 public:
   ~StateMenu() override {}
-  void draw() override {
+  void draw(const ButtonStruct& btn) override {
     oled_string(40, 0, "SETTINGS", 12, 1);
     oled_string(20, 54, "EXIT", 12, 1);
     oled_string(80, 54, "SELECT", 12, 1);
@@ -392,7 +392,7 @@ int main() {
     process_buttons(btn);
     state->button(btn);
     if (!twi_has_started()) {
-      state->draw();
+      state->draw(btn);
       spinner(i);
       oled_display();
       i = (i+1)%16;
