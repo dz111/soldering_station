@@ -510,12 +510,14 @@ private:
   bool editing = false;
 };
 
-void spinner(uint8_t i) {
+void spinner(uint8_t& i) {
   for (int j = 0; j < 16; ++j) {
     oled_pixel(127-j, 0, 0);
   }
   if (i < 8) oled_pixel(127-i, 0, 1);
   else       oled_pixel(127-15+i, 0, 1);
+
+  i = (i+1)%16;
 }
 
 int main() {
@@ -603,7 +605,6 @@ int main() {
       context.draw(btn);
       spinner(i);
       oled_display();
-      i = (i+1)%16;
     }
   }
 }
