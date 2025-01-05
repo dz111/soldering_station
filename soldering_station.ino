@@ -19,6 +19,7 @@
 
 #include <avr/wdt.h>
 
+
 #if BOARD_REV == 2
 void io_init() {
   DDRB  = 0b00000110;
@@ -34,6 +35,9 @@ void io_init() {
 #define BTN_FN2 (PIND & _BV(PD5))
 #define BTN_INC (PIND & _BV(PD6))
 #define BTN_DEC (PIND & _BV(PD7))
+#define PIN_SLEEP      (PINB & _BV(PB0))
+#define PIN_TOOLCHANGE (PINB & _BV(PB5))
+//#define PIN_TOOLCHANGE (1)
 
 #endif  // BOARD_REV == 2
 
@@ -52,6 +56,8 @@ void io_init() {
 #define BTN_FN2 (PORTD & _BV(PD3))
 #define BTN_INC (PORTD & _BV(PD4))
 #define BTN_DEC (PORTD & _BV(PD5))
+#define PIN_SLEEP      (PINB & _BV(PB0))
+#define PIN_TOOLCHANGE (PIND & _BV(PD7));
 
 #endif  // BOARD_REV == 3
 
@@ -145,6 +151,20 @@ ISR(TIMER2_COMPA_vect) {
 //  pwm_on();
 }
 
+void wdt_init(uint8_t prescale) {
+  cli();
+  wdt_reset();
+  
+  WDTCSR = _BV(WDE) | _BV(WDIE) | _BV(WDCE);
+  WDTCSR = _BV(WDE) | _BV(WDIE) | (prescale & 0b0111) | ((prescale & 0b1000) << 2);
+
+  sei();
+}
+
+ISR(WDT_vect) {
+  eeprom_write(WDT_FLAG, WDT_FLAG_TRUE);
+}
+
 struct Button {
   bool is_pressed : 1;
   bool on_press   : 1;
@@ -189,11 +209,48 @@ void draw_power_meter(uint8_t duty) {
   }
 }
 
+class Context;
+
 class State {
 public:
   virtual ~State() {}
   virtual void draw(const ButtonStruct& btn) = 0;
-  virtual void button(const ButtonStruct& btn) = 0;
+  virtual void update(const ButtonStruct& btn) = 0;
+  void set_context(Context* context) {
+    m_context = context;
+  }
+  Context* context() {
+    return m_context;
+  }
+private:
+  Context* m_context;
+};
+
+class Context {
+public:
+  Context() : m_state(nullptr) { }
+  Context(State* state) : m_state(state) { }
+  ~Context() { 
+    delete m_state; 
+  }
+  
+  void transition(State* state) {
+    delete m_state;
+    m_state = state;
+    m_state->set_context(this);
+    oled_clear();
+  }
+  template <typename T>
+  void transition() {
+    transition(new T());
+  }
+
+  void draw(const ButtonStruct& btn) {
+    m_state->draw(btn);
+  }
+  void update(const ButtonStruct& btn) {
+    m_state->update(btn);
+  }
 
   int16_t set_temperature() const {
     return m_set_temperature;
@@ -205,9 +262,20 @@ public:
     uint16_t t = m_set_temperature + delta;
     set_temperature(t);
   }
-protected:
-  int16_t m_set_temperature = 300;
+  void save_temperature() {
+    eeprom_write(0, sizeof(m_set_temperature), &m_set_temperature);
+  }
+  void load_temperature() {
+    eeprom_read(&m_set_temperature, sizeof(m_set_temperature), 0);
+  }
+private:
+  State* m_state;
+  int16_t m_set_temperature;
 };
+
+class StateSleep;
+class StateToolChange;
+class StateOff;
 
 class StateWorking : public State {
 public:
@@ -216,7 +284,7 @@ public:
     uint8_t duty = 75;
 
     String str_setpoint = "SET ";
-    str_setpoint += set_temperature();
+    str_setpoint += context()->set_temperature();
     str_setpoint += " C";
     
     oled_string(37, 0, str_setpoint.c_str(), 12, 1);
@@ -231,15 +299,24 @@ public:
 
     draw_power_meter(duty);
   }
-  void button(const ButtonStruct& btn) {
+  void update(const ButtonStruct& btn) override {
+    if (!PIN_SLEEP) {
+      context()->transition<StateSleep>();
+    }
+    if (!PIN_TOOLCHANGE) {
+      context()->transition<StateToolChange>();
+    }
     if (btn.inc.on_press) {
-      set_temperature_inc(10);
+      context()->set_temperature_inc(10);
     }
     if (btn.dec.on_press) {
-      set_temperature_inc(-10);
+      context()->set_temperature_inc(-10);
+    }
+    if (btn.fn1.on_release) {
+      context()->transition<StateOff>();
     }
     if (btn.fn2.on_release) {
-      eeprom_write(0, sizeof(m_set_temperature), &m_set_temperature);
+      context()->save_temperature();
       usart_println("saved to eeprom");
     }
   }
@@ -248,7 +325,7 @@ public:
 class StateSleep : public State {
 public:
   ~StateSleep() override {}
-  void draw(const ButtonStruct& btn) override {
+  void draw(const ButtonStruct&) override {
     uint8_t duty = 3;
 
     oled_string(31, 0, "SLEEP 200 C", 12, 1);
@@ -263,6 +340,11 @@ public:
 
     draw_power_meter(duty);
   }
+  void update(const ButtonStruct&) override {
+    if (PIN_SLEEP) {
+      context()->transition<StateWorking>();
+    }
+  }
 };
 
 class StateOff : public State {
@@ -271,38 +353,43 @@ public:
   void draw(const ButtonStruct& btn) override {
     oled_string(55, 0, "OFF", 12, 1);
     oled_string(40, 16, "265", 32, 1);
-    oled_string(26, 54, "ON", 12, 1);
-    oled_string(86, 54, "MENU", 12, 1);
+    oled_string(26, 54, "ON", 12, !btn.fn1.is_pressed);
+    oled_string(86, 54, "MENU", 12, !btn.fn2.is_pressed);
     oled_string(102, 20, "AMB", 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
-    
-    oled_char(0, 0, '0' + m_counter, 12, 1);
-    m_counter++; if (m_counter > 9) m_counter = 0;
   }
-private:
-  uint8_t m_counter = 0;
-};
-
-class StateTipChange : public State {
-public:
-  ~StateTipChange() override {}
-  void draw(const ButtonStruct& btn) override {
-    oled_string(34, 27, "TIP CHANGE", 12, 1);
+  void update(const ButtonStruct& btn) override {
+    if (btn.fn1.on_release) {
+      context()->transition<StateWorking>();
+    }
   }
 };
 
-class StateNoTip : public State {
+class StateToolChange : public State {
 public:
-  ~StateNoTip() override {}
-  void draw(const ButtonStruct& btn) override {
-    oled_string(46, 27, "NO TIP", 12, 1);
+  ~StateToolChange() override {}
+  void draw(const ButtonStruct&) override {
+    oled_string(31, 27, "TOOL CHANGE", 12, 1);
+  }
+  void update(const ButtonStruct&) override {
+    if (PIN_TOOLCHANGE) {
+      context()->transition<StateWorking>();
+    }
+  }
+};
+
+class StateNoTool : public State {
+public:
+  ~StateNoTool() override {}
+  void draw(const ButtonStruct&) override {
+    oled_string(43, 27, "NO TOOL", 12, 1);
   }
 };
 
 class StateMenu : public State {
 public:
   ~StateMenu() override {}
-  void draw(const ButtonStruct& btn) override {
+  void draw(const ButtonStruct&) override {
     oled_string(40, 0, "SETTINGS", 12, 1);
     oled_string(20, 54, "EXIT", 12, 1);
     oled_string(80, 54, "SELECT", 12, 1);
@@ -332,13 +419,6 @@ int main() {
   usart_init(3);
   usart_print("\nSoldering Station 245\n");
 
-  int16_t t;
-  eeprom_read(&t, sizeof(t), 0);
-  
-  String s = String(t, DEC);
-  usart_print("EEPROM 0x0000: ");
-  usart_println(s.c_str());
-
   io_init();
 
   pwm_init();
@@ -355,30 +435,31 @@ int main() {
   oled_clear();
   oled_display();
 
-  // Arduino UNO bootloader sets MCUSR to 0 :( :( :(
-  // Apparently newer versions of the bootloader correct this??
-
-  //auto mcu = MCUSR;
-  //MCUSR = 0;
-
-  //Serial.print("MCUSR: "); Serial.print(mcu, BIN); Serial.println();
-
-//  if (mcu & _BV(WDRF)) {
-//    oled_string(10, 52, "WATCHDOG RESET", 12, 1); 
-//  } else {
-//    oled_string(10, 52, "NO WARNINGS", 12, 1); 
-//  }
+  
 
 //  adc_set_destination(0, &steps_thermo);
 //  adc_set_destination(1, &steps_current);
 //  adc_set_destination(3, &steps_voltage);
 //  adc_set_destination(8, &steps_ambient);
 
-  //wdt_init();
-  adc_start();
+  Context context;
+  context.load_temperature();
+  uint8_t wdt_flag = eeprom_read(WDT_FLAG);
+  if (wdt_flag == WDT_FLAG_TRUE) {
+    usart_println("# Watchdog reset!");
+    context.transition<StateOff>();
+  } else {
+    context.transition<StateWorking>();
+  }
 
-  State* state = new StateWorking();
-  state->set_temperature(t);
+  if (wdt_flag != WDT_FLAG_FALSE) {
+    eeprom_write(WDT_FLAG, WDT_FLAG_FALSE);
+  }
+
+  wdt_init(WDTO_60MS);
+  //wdt_init(WDTO_4S);
+  
+  adc_start();
 
   String serial_input_buffer;
 
@@ -411,10 +492,12 @@ int main() {
       }
     }
 
+    if (!BTN_FN2) while(1);
+
     process_buttons(btn);
-    state->button(btn);
+    context.update(btn);
     if (!twi_has_started()) {
-      state->draw(btn);
+      context.draw(btn);
       spinner(i);
       oled_display();
       i = (i+1)%16;
@@ -563,21 +646,6 @@ ISR(PCINT0_vect) {
 //    pwm_off();
 //  }
 //}
-
-
-
-void wdt_init() {
-  cli();
-  wdt_reset();
-  
-  WDTCSR = _BV(WDCE) | _BV(WDE);
-  //WDTCSR |= _BV(WDP0);  // WDP3:0 = 0001; WDT time-out 64ms -> min loop rate of 15Hz
-  WDTCSR = _BV(WDE) | _BV(WDP3); // timeout = 4s for testing
-  //WDTCSR |= _BV(WDE);
-//  wdt_reset();
-//  __asm("wdr");
-  sei();
-}
 
 //void itoa_rj(uint32_t value, char* str, uint8_t slen) {
 //  char* tp = str + slen - 1;

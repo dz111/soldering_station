@@ -1,5 +1,9 @@
 #pragma once
 
+#define WDT_FLAG 3
+#define WDT_FLAG_TRUE  0x55
+#define WDT_FLAG_FALSE 0xAA
+
 uint8_t eeprom_read(uint16_t address) {
   while (EECR & _BV(EEPE));  // Wait for outstanding writes to complete
   EEAR = address;
