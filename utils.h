@@ -4,3 +4,5 @@
 #define CLEAR(reg, n)  reg &= ~((uint8_t)1 << n)
 #define TOGGLE(reg, n) reg ^= ((uint8_t)1 << n)
 #define ISSET(reg, n)  ((reg >> n) & (uint8_t)1)
+
+#define clamp(var, lower, upper) (((var) > (upper)) ? (upper) : (((var) < (lower)) ? (lower) : (var)))

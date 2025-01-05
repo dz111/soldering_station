@@ -253,29 +253,31 @@ public:
   }
 
   int16_t set_temperature() const {
-    return m_set_temperature;
+    return m_set;
   }
   void set_temperature(int16_t t) {
-    m_set_temperature = (t > 450) ? 450 : ((t < 150) ? 150 : t);
+    m_set = clamp(t, 150, 450);
   }
   void set_temperature_inc(int16_t delta) {
-    uint16_t t = m_set_temperature + delta;
-    set_temperature(t);
+    set_temperature(m_set + delta);
   }
-  void save_temperature() {
-    eeprom_write(0, sizeof(m_set_temperature), &m_set_temperature);
+  void save_defaultset(int16_t t) {
+    eeprom_write(0, sizeof(t), &t);
   }
-  void load_temperature() {
-    eeprom_read(&m_set_temperature, sizeof(m_set_temperature), 0);
+  int16_t load_defaultset() {
+    uint16_t t;
+    eeprom_read(&t, sizeof(t), 0);
+    return t;
   }
 private:
   State* m_state;
-  int16_t m_set_temperature;
+  int16_t m_set;
 };
 
 class StateSleep;
-class StateToolChange;
 class StateOff;
+class StateToolChange;
+class StateMenu;
 
 class StateWorking : public State {
 public:
@@ -316,8 +318,7 @@ public:
       context()->transition<StateOff>();
     }
     if (btn.fn2.on_release) {
-      context()->save_temperature();
-      usart_println("saved to eeprom");
+      context()->transition<StateMenu>();
     }
   }
 };
@@ -325,13 +326,13 @@ public:
 class StateSleep : public State {
 public:
   ~StateSleep() override {}
-  void draw(const ButtonStruct&) override {
+  void draw(const ButtonStruct& btn) override {
     uint8_t duty = 3;
 
     oled_string(31, 0, "SLEEP 200 C", 12, 1);
     oled_string(40, 16, "265", 32, 1);
-    oled_string(23, 54, "OFF", 12, 1);
-    oled_string(86, 54, "MENU", 12, 1);
+    oled_string(23, 54, "OFF", 12, !btn.fn1.is_pressed);
+    oled_string(86, 54, "MENU", 12, !btn.fn2.is_pressed);
     oled_string(102, 20, "AMB", 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
     
@@ -340,9 +341,15 @@ public:
 
     draw_power_meter(duty);
   }
-  void update(const ButtonStruct&) override {
+  void update(const ButtonStruct& btn) override {
     if (PIN_SLEEP) {
       context()->transition<StateWorking>();
+    }
+    if (btn.fn1.on_release) {
+      context()->transition<StateOff>();
+    }
+    if (btn.fn2.on_release) {
+      context()->transition<StateMenu>();
     }
   }
 };
@@ -361,6 +368,9 @@ public:
   void update(const ButtonStruct& btn) override {
     if (btn.fn1.on_release) {
       context()->transition<StateWorking>();
+    }
+    if (btn.fn2.on_release) {
+      context()->transition<StateMenu>();
     }
   }
 };
@@ -389,20 +399,115 @@ public:
 class StateMenu : public State {
 public:
   ~StateMenu() override {}
-  void draw(const ButtonStruct&) override {
+  void draw(const ButtonStruct& btn) override {
     oled_string(40, 0, "SETTINGS", 12, 1);
-    oled_string(20, 54, "EXIT", 12, 1);
-    oled_string(80, 54, "SELECT", 12, 1);
+    if (editing) {
+//      oled_string(14, 54, "CANCEL", 12, !btn.fn1.is_pressed);
+//      oled_string(84, 54, "SAVE", 12, !btn.fn2.is_pressed);
+    } else {
+      oled_string(20, 54, "EXIT", 12, !btn.fn1.is_pressed);
+      oled_string(80, 54, "SELECT", 12, !btn.fn2.is_pressed);
+    }
 
-    oled_string(0, 16, "DEFAULT", 12, 0);
-    oled_string(98, 16, "300 C", 12, 1);
+    if (m_item < 3) {
+      String str;
+      
+      str = "";
+      str += m_defaultset;
+      str += " C";
+      oled_string(0, 16, "DEFAULT", 12, !(m_item == 0 && !editing));
+      oled_string(98, 16, str.c_str(), 12, !(m_item == 0 && editing));
 
-    oled_string(0, 28, "SLEEP", 12, 1);
-    oled_string(98, 28, "200 C", 12, 1);
+      str = "";
+      str += m_sleepset;
+      str += " C";
+      oled_string(0, 28, "SLEEP", 12, !(m_item == 1 && !editing));
+      oled_string(98, 28, str.c_str(), 12, !(m_item == 1 && editing));
 
-    oled_string(0, 40, "OFF TIME", 12, 1);
-    oled_string(92, 40, "30 MIN", 12, 1);
+      str = "";
+      str += m_offtime;
+      str += " MIN";
+      oled_string(0, 40, "OFF TIME", 12, !(m_item == 2 && !editing));
+      oled_string(92, 40, str.c_str(), 12, !(m_item == 2 && editing));
+    } else {
+      oled_string(0, 16, "CAL TEMP", 12, !(m_item == 3 && !editing));
+    }
   }
+  void update(const ButtonStruct& btn) override {
+    if (editing) {
+      if (btn.fn1.on_release) {
+        editing = false;
+        oled_clear();
+      }
+      
+      if (btn.dec.on_press) {
+        switch (m_item) {
+        case 0:
+          m_defaultset = clamp(m_defaultset - 10, 150, 450);
+          break;
+        case 1:
+          m_sleepset = clamp(m_sleepset - 10, 50, 250);
+          break;
+        case 2:
+          m_offtime = clamp(m_offtime - 5, 5, 60);
+          break;
+        default:
+          break;  // NOT REACHED
+        }
+      }
+      if (btn.inc.on_press) {
+        switch (m_item) {
+        case 0:
+          m_defaultset = clamp(m_defaultset + 10, 150, 450);
+          break;
+        case 1:
+          m_sleepset = clamp(m_sleepset + 10, 50, 250);
+          break;
+        case 2:
+          m_offtime = clamp(m_offtime + 5, 5, 60);
+          break;
+        default:
+          break;  // NOT REACHED
+        }
+      }
+      if (btn.fn2.on_release) {
+        switch (m_item) {
+        case 0:
+        case 1:
+        case 2:
+        default:
+          break;  // NOT REACHED
+        }
+        editing = false;
+        oled_clear();
+      }
+    } else {
+      if (btn.dec.on_press) {
+        if (m_item < (n_items - 1) && (m_item % 3) == 2) oled_clear();
+        m_item++;
+        m_item = clamp(m_item, 0, n_items-1);
+      }
+      if (btn.inc.on_press) {
+        if (m_item > 0 && (m_item % 3) == 0) oled_clear();
+        m_item--;
+        m_item = clamp(m_item, 0, n_items-1);
+      }
+      if (btn.fn1.on_release) {
+        context()->transition<StateWorking>();
+      }
+      if (btn.fn2.on_release) {
+        editing = true;
+        oled_clear();
+      }
+    }
+  }
+private:
+  static const uint8_t n_items = 4;
+  int8_t m_item = 0;
+  int16_t m_defaultset = 300;
+  int16_t m_sleepset = 200;
+  int8_t m_offtime = 30;
+  bool editing = false;
 };
 
 void spinner(uint8_t i) {
@@ -443,7 +548,7 @@ int main() {
 //  adc_set_destination(8, &steps_ambient);
 
   Context context;
-  context.load_temperature();
+  context.set_temperature(context.load_defaultset());
   uint8_t wdt_flag = eeprom_read(WDT_FLAG);
   if (wdt_flag == WDT_FLAG_TRUE) {
     usart_println("# Watchdog reset!");
@@ -456,8 +561,8 @@ int main() {
     eeprom_write(WDT_FLAG, WDT_FLAG_FALSE);
   }
 
-  wdt_init(WDTO_60MS);
-  //wdt_init(WDTO_4S);
+  //wdt_init(WDTO_60MS);
+  wdt_init(WDTO_2S);
   
   adc_start();
 
@@ -491,8 +596,6 @@ int main() {
         }
       }
     }
-
-    if (!BTN_FN2) while(1);
 
     process_buttons(btn);
     context.update(btn);
