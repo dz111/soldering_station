@@ -14,6 +14,7 @@
 #include "oled.h"
 #include "tw.h"
 #include "usart.h"
+#include "userdata.h"
 #include "utils.h"
 
 #include <avr/wdt.h>
@@ -193,8 +194,19 @@ public:
   virtual ~State() {}
   virtual void draw(const ButtonStruct& btn) = 0;
   virtual void button(const ButtonStruct& btn) = 0;
+
+  int16_t set_temperature() const {
+    return m_set_temperature;
+  }
+  void set_temperature(int16_t t) {
+    m_set_temperature = (t > 450) ? 450 : ((t < 150) ? 150 : t);
+  }
+  void set_temperature_inc(int16_t delta) {
+    uint16_t t = m_set_temperature + delta;
+    set_temperature(t);
+  }
 protected:
-  uint16_t set_temperature = 300;
+  int16_t m_set_temperature = 300;
 };
 
 class StateWorking : public State {
@@ -204,7 +216,7 @@ public:
     uint8_t duty = 75;
 
     String str_setpoint = "SET ";
-    str_setpoint += set_temperature;
+    str_setpoint += set_temperature();
     str_setpoint += " C";
     
     oled_string(37, 0, str_setpoint.c_str(), 12, 1);
@@ -221,12 +233,14 @@ public:
   }
   void button(const ButtonStruct& btn) {
     if (btn.inc.on_press) {
-      set_temperature += 10;
-      if (set_temperature > 450) set_temperature = 450;
+      set_temperature_inc(10);
     }
     if (btn.dec.on_press) {
-      set_temperature -= 10;
-      if (set_temperature < 150) set_temperature = 150;
+      set_temperature_inc(-10);
+    }
+    if (btn.fn2.on_release) {
+      eeprom_write(0, sizeof(m_set_temperature), &m_set_temperature);
+      usart_println("saved to eeprom");
     }
   }
 };
@@ -318,6 +332,13 @@ int main() {
   usart_init(3);
   usart_print("\nSoldering Station 245\n");
 
+  int16_t t;
+  eeprom_read(&t, sizeof(t), 0);
+  
+  String s = String(t, DEC);
+  usart_print("EEPROM 0x0000: ");
+  usart_println(s.c_str());
+
   io_init();
 
   pwm_init();
@@ -357,6 +378,7 @@ int main() {
   adc_start();
 
   State* state = new StateWorking();
+  state->set_temperature(t);
 
   String serial_input_buffer;
 
