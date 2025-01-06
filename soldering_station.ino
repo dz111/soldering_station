@@ -599,13 +599,21 @@ uint16_t stack_hwm() {
   const uint8_t* p = (uint8_t*)RAMEND;
   uint16_t c = 0;
   while (*p != CANARY && p > (uint8_t*)__malloc_heap_start) {
-    p++;
+    p--;
     c++;
   }
   return c;
 }
-#endif  // STACK_HWM
 
+void print_stack_hwm() {
+  uint16_t hwm = stack_hwm();
+  char buf[8];
+  itoa(hwm, buf, 10);
+  usart_print_P(PSTR("# Stack high water mark: "));
+  usart_println(buf);
+}
+#endif  // STACK_HWM
+#include <alloca.h>
 int main() {
   sei();
 
@@ -636,6 +644,7 @@ int main() {
     usart_print_P(PSTR("# Heap/stack size: "));
     usart_println(buf);
   }
+  print_stack_hwm();
 
   oled_clear();
   oled_display();
@@ -716,11 +725,7 @@ int main() {
 
 #if STACK_HWM
       if (i==0) {
-        uint16_t hwm = stack_hwm();
-        char buf[8];
-        itoa(hwm, buf, 10);
-        usart_print_P(PSTR("# Stack high water mark: "));
-        usart_println(buf);
+        print_stack_hwm();
       }
 #endif  // STACK_HWM
     }
