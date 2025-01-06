@@ -77,6 +77,16 @@ void usart_print(const char* str) {
   }
 }
 
+void usart_print_P(const char* str) {
+  const char* cp = str;
+  while (1) {
+    char ch = pgm_read_byte(cp);
+    if (ch == 0) break;
+    usart_char(ch);
+    ++cp;
+  }
+}
+
 void usart_println(const char* str) {
   usart_print(str);
   usart_char('\n');

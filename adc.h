@@ -2,9 +2,10 @@
 
 #include "utils.h"
 
+#define NUM_ADC_CHANNELS 4
 using vuint16_t = volatile uint16_t;
 using adc_dest_t = vuint16_t*;
-adc_dest_t adc_destinations[9] = {nullptr};
+adc_dest_t adc_destinations[NUM_ADC_CHANNELS] = {nullptr};
 uint8_t adc_curr_channel;
 uint8_t adc_next_channel;
 
@@ -31,8 +32,8 @@ void adc_set_destination(uint8_t channel, adc_dest_t destination) {
 
 uint8_t adc_find_next_channel(uint8_t curr_channel) {
   uint8_t next_channel;
-  for (uint8_t i = 0; i <= 8; ++i) {
-    next_channel = (curr_channel + i + 1) % 9;
+  for (uint8_t i = 0; i < NUM_ADC_CHANNELS; ++i) {
+    next_channel = (curr_channel + i + 1) % NUM_ADC_CHANNELS;
     if (adc_destinations[next_channel] != nullptr) {
       return next_channel;
     }

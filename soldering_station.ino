@@ -1,4 +1,5 @@
 #define BOARD_REV 2
+#define STACK_HWM 0
 
 #if BOARD_REV == 2
 #define OLED_RST_PORT PORTB
@@ -9,6 +10,34 @@
 #define OLED_RST_PORT PORTB
 #define OLED_RST_PIN  PB4
 #endif  // BOARD_REV == 3
+
+#define ERROR_MAXLEN 20
+char current_error[ERROR_MAXLEN + 1] = {};
+uint8_t error_count = 0;
+#define is_current_error() ((bool)(current_error[0]))
+#define print_current_error() if (is_current_error()) oled_string(0, 42, current_error, 12, 1)
+#define clear_current_error() current_error[0] = 0; oled_clear()
+void set_error(const char* str) {
+  size_t i = 0;
+  for (; (i < 20) && (str[i] != 0); ++i) {
+    current_error[i] = str[i];
+  }
+  current_error[i] = 0;
+  error_count++;
+}
+void set_error_P(const char* str) {
+  size_t i = 0;
+  while (i < 20) {
+    char ch = pgm_read_byte(str + i);
+    if (!ch) break;
+    current_error[i] = ch;
+    ++i;
+  }
+  current_error[i] = 0;
+  error_count++;
+}
+
+#define CANARY (0xAA)
 
 #include "adc.h"
 #include "oled.h"
@@ -166,10 +195,11 @@ ISR(WDT_vect) {
 }
 
 struct Button {
+  Button() : history(0), is_pressed(false), on_press(false), on_release(false) { }
+  uint8_t history;
   bool is_pressed : 1;
   bool on_press   : 1;
   bool on_release : 1;
-  uint8_t history;
 };
 
 struct ButtonStruct {
@@ -182,10 +212,11 @@ struct ButtonStruct {
 void process_button(struct Button& btn, bool pin) {
   btn.history <<= 1;
   btn.history |= pin;
-  btn.on_press  = (!btn.is_pressed && (btn.history == 0));
-  btn.on_release = (btn.is_pressed && (btn.history == 0xff));
-  if (btn.history == 0)      btn.is_pressed = true;
+  bool was_pressed = btn.is_pressed;
+  if (btn.history == 0)    btn.is_pressed = true;
   if (btn.history == 0xff) btn.is_pressed = false;
+  btn.on_press   = (!was_pressed && btn.is_pressed);
+  btn.on_release = (was_pressed && !btn.is_pressed);
 }
 
 void process_buttons(struct ButtonStruct& btn) {
@@ -291,15 +322,17 @@ public:
     
     oled_string(37, 0, str_setpoint.c_str(), 12, 1);
     oled_string(40, 16, "265", 32, 1);
-    oled_string(23, 54, "OFF", 12, !btn.fn1.is_pressed);
-    oled_string(86, 54, "MENU", 12, !btn.fn2.is_pressed);
-    oled_string(102, 20, "AMB", 12, 1);
+    oled_string_P(23, 54, PSTR("OFF"), 12, !(btn.fn1.is_pressed && !is_current_error()));
+    oled_string_P(84, 54, PSTR("MENU"), 12, btn.fn2.is_pressed ? 0 : 1);
+    oled_string_P(102, 20, PSTR("AMB"), 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
     
     //oled_string(3, 44, "80", 12, 1);
     oled_string(0, 44, "120", 12, 1);
 
     draw_power_meter(duty);
+
+    print_current_error();
   }
   void update(const ButtonStruct& btn) override {
     if (!PIN_SLEEP) {
@@ -315,7 +348,11 @@ public:
       context()->set_temperature_inc(-10);
     }
     if (btn.fn1.on_release) {
-      context()->transition<StateOff>();
+      if (is_current_error()) {
+        clear_current_error();
+      } else {
+        context()->transition<StateOff>();
+      }
     }
     if (btn.fn2.on_release) {
       context()->transition<StateMenu>();
@@ -325,28 +362,37 @@ public:
 
 class StateSleep : public State {
 public:
-  ~StateSleep() override {}
+  ~StateSleep() override { }
   void draw(const ButtonStruct& btn) override {
     uint8_t duty = 3;
 
     oled_string(31, 0, "SLEEP 200 C", 12, 1);
     oled_string(40, 16, "265", 32, 1);
-    oled_string(23, 54, "OFF", 12, !btn.fn1.is_pressed);
-    oled_string(86, 54, "MENU", 12, !btn.fn2.is_pressed);
-    oled_string(102, 20, "AMB", 12, 1);
+    oled_string_P(23, 54, PSTR("OFF"), 12, !(btn.fn1.is_pressed && !is_current_error()));
+    oled_string_P(84, 54, PSTR("MENU"), 12, !btn.fn2.is_pressed);
+    oled_string_P(102, 20, PSTR("AMB"), 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
     
     //oled_string(3, 44, "80", 12, 1);
     oled_string(6, 44, "5", 12, 1);
 
     draw_power_meter(duty);
+
+    print_current_error();
   }
   void update(const ButtonStruct& btn) override {
     if (PIN_SLEEP) {
       context()->transition<StateWorking>();
     }
+    if (!PIN_TOOLCHANGE) {
+      context()->transition<StateToolChange>();
+    }
     if (btn.fn1.on_release) {
-      context()->transition<StateOff>();
+      if (is_current_error()) {
+        clear_current_error();
+      } else {
+        context()->transition<StateOff>();
+      }
     }
     if (btn.fn2.on_release) {
       context()->transition<StateMenu>();
@@ -358,16 +404,22 @@ class StateOff : public State {
 public:
   ~StateOff() override {}
   void draw(const ButtonStruct& btn) override {
-    oled_string(55, 0, "OFF", 12, 1);
+    oled_string_P(55, 0, PSTR("OFF"), 12, 1);
     oled_string(40, 16, "265", 32, 1);
-    oled_string(26, 54, "ON", 12, !btn.fn1.is_pressed);
-    oled_string(86, 54, "MENU", 12, !btn.fn2.is_pressed);
-    oled_string(102, 20, "AMB", 12, 1);
+    oled_string_P(26, 54, PSTR("ON"), 12, !(btn.fn1.is_pressed && !is_current_error()));
+    oled_string_P(84, 54, PSTR("MENU"), 12, !btn.fn2.is_pressed);
+    oled_string_P(102, 20, PSTR("AMB"), 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
+
+    print_current_error();
   }
   void update(const ButtonStruct& btn) override {
     if (btn.fn1.on_release) {
-      context()->transition<StateWorking>();
+      if (is_current_error()) {
+        clear_current_error();
+      } else {
+        context()->transition<StateWorking>();
+      }
     }
     if (btn.fn2.on_release) {
       context()->transition<StateMenu>();
@@ -379,11 +431,17 @@ class StateToolChange : public State {
 public:
   ~StateToolChange() override {}
   void draw(const ButtonStruct&) override {
-    oled_string(31, 27, "TOOL CHANGE", 12, 1);
+    oled_string_P(31, 27, PSTR("TOOL CHANGE"), 12, 1);
+    print_current_error();
   }
-  void update(const ButtonStruct&) override {
+  void update(const ButtonStruct& btn) override {
     if (PIN_TOOLCHANGE) {
       context()->transition<StateWorking>();
+    }
+    if (btn.fn1.on_release) {
+      if (is_current_error()) {
+        clear_current_error();
+      }
     }
   }
 };
@@ -392,21 +450,29 @@ class StateNoTool : public State {
 public:
   ~StateNoTool() override {}
   void draw(const ButtonStruct&) override {
-    oled_string(43, 27, "NO TOOL", 12, 1);
+    oled_string_P(43, 27, PSTR("NO TOOL"), 12, 1);
+    print_current_error();
+  }
+  void update(const ButtonStruct& btn) override {
+    if (btn.fn1.on_release) {
+      if (is_current_error()) {
+        clear_current_error();
+      }
+    }
   }
 };
 
 class StateMenu : public State {
 public:
-  ~StateMenu() override {}
+  ~StateMenu() override  { }
   void draw(const ButtonStruct& btn) override {
-    oled_string(40, 0, "SETTINGS", 12, 1);
+    oled_string_P(40, 0, PSTR("SETTINGS"), 12, 1);
     if (editing) {
-//      oled_string(14, 54, "CANCEL", 12, !btn.fn1.is_pressed);
-//      oled_string(84, 54, "SAVE", 12, !btn.fn2.is_pressed);
+      oled_string_P(14, 54, PSTR("CANCEL"), 12, !btn.fn1.is_pressed);
+      oled_string_P(84, 54, PSTR("SAVE"), 12, !btn.fn2.is_pressed);
     } else {
-      oled_string(20, 54, "EXIT", 12, !btn.fn1.is_pressed);
-      oled_string(80, 54, "SELECT", 12, !btn.fn2.is_pressed);
+      oled_string_P(20, 54, PSTR("EXIT"), 12, !btn.fn1.is_pressed);
+      oled_string_P(80, 54, PSTR("SELECT"), 12, !btn.fn2.is_pressed);
     }
 
     if (m_item < 3) {
@@ -415,22 +481,22 @@ public:
       str = "";
       str += m_defaultset;
       str += " C";
-      oled_string(0, 16, "DEFAULT", 12, !(m_item == 0 && !editing));
+      oled_string_P(0, 16, PSTR("DEFAULT"), 12, !(m_item == 0 && !editing));
       oled_string(98, 16, str.c_str(), 12, !(m_item == 0 && editing));
 
       str = "";
       str += m_sleepset;
       str += " C";
-      oled_string(0, 28, "SLEEP", 12, !(m_item == 1 && !editing));
+      oled_string_P(0, 28, PSTR("SLEEP"), 12, !(m_item == 1 && !editing));
       oled_string(98, 28, str.c_str(), 12, !(m_item == 1 && editing));
 
       str = "";
       str += m_offtime;
       str += " MIN";
-      oled_string(0, 40, "OFF TIME", 12, !(m_item == 2 && !editing));
+      oled_string_P(0, 40, PSTR("OFF TIME"), 12, !(m_item == 2 && !editing));
       oled_string(92, 40, str.c_str(), 12, !(m_item == 2 && editing));
     } else {
-      oled_string(0, 16, "CAL TEMP", 12, !(m_item == 3 && !editing));
+      oled_string_P(0, 16, PSTR("CAL TEMP"), 12, !(m_item == 3 && !editing));
     }
   }
   void update(const ButtonStruct& btn) override {
@@ -493,7 +559,7 @@ public:
         m_item = clamp(m_item, 0, n_items-1);
       }
       if (btn.fn1.on_release) {
-        context()->transition<StateWorking>();
+        context()->transition<StateOff>();
       }
       if (btn.fn2.on_release) {
         editing = true;
@@ -510,34 +576,66 @@ private:
   bool editing = false;
 };
 
-void spinner(uint8_t& i) {
+void spinner(uint8_t& c) {
+  int i = c%16;
   for (int j = 0; j < 16; ++j) {
     oled_pixel(127-j, 0, 0);
   }
   if (i < 8) oled_pixel(127-i, 0, 1);
   else       oled_pixel(127-15+i, 0, 1);
 
-  i = (i+1)%16;
+  c++;
 }
+
+#if STACK_HWM
+void fill_canaries() {
+  uint8_t* p = (uint8_t*)__malloc_heap_start;
+  while (p <= SP) {
+    *p++ = CANARY;
+  }
+}
+
+uint16_t stack_hwm() {
+  const uint8_t* p = (uint8_t*)RAMEND;
+  uint16_t c = 0;
+  while (*p != CANARY && p > (uint8_t*)__malloc_heap_start) {
+    p++;
+    c++;
+  }
+  return c;
+}
+#endif  // STACK_HWM
 
 int main() {
   sei();
 
+  uint16_t stacksiz = (uint16_t)RAMEND - (uint16_t)__malloc_heap_start;
+#if STACK_HWM
+  fill_canaries();
+#endif  // STACK_HWM
+
   usart_init(3);
-  usart_print("\nSoldering Station 245\n");
+  usart_print_P(PSTR("\nSoldering Station 245\n"));
 
   io_init();
 
   pwm_init();
   timer_init();
 
-  usart_print("# Init two wire interface...");
+  usart_print_P(PSTR("# Init two wire interface..."));
   twi_init();
-  usart_print("  ok\n# Init OLED...");
+  usart_print_P(PSTR("  ok\n# Init OLED..."));
   oled_init();
-  usart_print("  ok\n# Switch on display...");
+  usart_print_P(PSTR("  ok\n# Switch on display..."));
   oled_on();
-  usart_print("  ok\n");
+  usart_print_P(PSTR("  ok\n"));
+
+  {
+    char buf[8];
+    itoa(stacksiz, buf, 10);
+    usart_print_P(PSTR("# Heap/stack size: "));
+    usart_println(buf);
+  }
 
   oled_clear();
   oled_display();
@@ -549,20 +647,22 @@ int main() {
 //  adc_set_destination(3, &steps_voltage);
 //  adc_set_destination(8, &steps_ambient);
 
+  uint8_t last_error = 0;
+
   Context context;
   context.set_temperature(context.load_defaultset());
   uint8_t wdt_flag = eeprom_read(WDT_FLAG);
-  if (wdt_flag == WDT_FLAG_TRUE) {
-    usart_println("# Watchdog reset!");
-    context.transition<StateOff>();
-  } else {
+//  if (wdt_flag == WDT_FLAG_TRUE) {
+//    set_error_P(PSTR("WATCHDOG RESET"));
+//    context.transition<StateOff>();
+//  } else {
     context.transition<StateWorking>();
-  }
+//  }
 
   if (wdt_flag != WDT_FLAG_FALSE) {
     eeprom_write(WDT_FLAG, WDT_FLAG_FALSE);
   }
-
+  
   //wdt_init(WDTO_60MS);
   wdt_init(WDTO_2S);
   
@@ -572,11 +672,19 @@ int main() {
 
   ButtonStruct btn;
 
-  usart_println("RDY");
+  usart_print_P(PSTR("RDY\n"));
 
   uint8_t i = 0;
   while (1) {
     wdt_reset();
+    
+    if (last_error != error_count) {
+      if (is_current_error()) {
+        usart_print_P(PSTR("# Error: "));
+        usart_println(current_error);
+      }
+      last_error = error_count;
+    }
 
     if (!usart_busy()) {
       uint8_t ch;
@@ -588,9 +696,9 @@ int main() {
             usart_send_oled();
             //while(usart_busy());
           } else {
-            usart_print("ERR unknown command: '");
-            usart_print(serial_input_buffer.c_str());
-            usart_print("'\nRDY\n");
+            usart_print_P(PSTR("ERR unknown command: "));
+            usart_println(serial_input_buffer.c_str());
+            usart_print_P(PSTR("RDY\n"));
           }
           serial_input_buffer = "";
         } else {
@@ -605,7 +713,20 @@ int main() {
       context.draw(btn);
       spinner(i);
       oled_display();
+
+#if STACK_HWM
+      if (i==0) {
+        uint16_t hwm = stack_hwm();
+        char buf[8];
+        itoa(hwm, buf, 10);
+        usart_print_P(PSTR("# Stack high water mark: "));
+        usart_println(buf);
+      }
+#endif  // STACK_HWM
     }
+
+    if (btn.inc.is_pressed && btn.dec.on_release) while (1);
+    if (btn.inc.on_release && btn.dec.is_pressed) set_error_P(PSTR("DUMMY ERROR 0x1234"));
   }
 }
 
@@ -623,9 +744,9 @@ int main() {
 
 
 ISR(PCINT0_vect) {
-  usart_println("TWI error: ");
-  //Serial.print(twi_get_error(), HEX);
-  //Serial.println();
+//  String s = "TWI ERR 0x";
+//  s += String(twi_get_error(), HEX);
+//  set_error(s.c_str());
   twi_clear_error();
 }
 

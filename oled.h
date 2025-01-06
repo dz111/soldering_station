@@ -387,7 +387,7 @@ void oled_off() {
 void oled_pixel(int x, int y, char color)
 {
     x += 3;  // The first 3 columns are not displayed
-    if(x > WIDTH || y > HEIGHT)return ;
+    if(x >= WIDTH || y >= HEIGHT)return ;
     if(color)
         oled_buf[x+(y/8)*WIDTH] |= 1<<(y%8);
     else
@@ -545,6 +545,25 @@ void oled_string(uint8_t x, uint8_t y, const char *pString, uint8_t Size, uint8_
         }
         
         oled_char(x, y, *pString, Size, Mode);
+        x += Size / 2;
+        pString++;
+    }
+}
+
+void oled_string_P(uint8_t x, uint8_t y, const char *pString, uint8_t Size, uint8_t Mode)
+{
+    while (1) {
+        char ch = pgm_read_byte(pString);
+        if (!ch) break;
+        if (x > (WIDTH - Size / 2)) {
+            x = 0;
+            y += Size;
+            if (y > (HEIGHT - Size)) {
+                y = x = 0;
+            }
+        }
+        
+        oled_char(x, y, ch, Size, Mode);
         x += Size / 2;
         pString++;
     }
