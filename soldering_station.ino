@@ -324,25 +324,21 @@ public:
       // adc 10-bits @ 5.00V, 4.883mV/step
       // => 2.056K/step
     int32_t thermocouple = (int32_t)m_steps_thermo * 2056;
-    thermocouple /= 100;
-    if ((thermocouple % 10) < 5) {
-      thermocouple = thermocouple / 10;
-    } else {
-      thermocouple = thermocouple / 10 + 1;
-    }
+    thermocouple /= 1000;
     return ambient() + thermocouple;
   }
 
   int16_t ambient() const {
     /*
      * Kyocera NB20 Type M4 NTC thermistor
+     * https://datasheets.kyocera-avx.com/nb21-nb12-nb20.pdf
      * 47k NTC + 47k resistor
      * For T = [-10C, 50C]:
      * T (C) = 96.45 * (TEMP/VREF) - 22.60
      * T (C) = 1/100,000 * (9419 * steps - 2,260,300)
      */
-    int32_t retval = 9419 * (int32_t)m_steps_ambient - 2260300;
-    return (int16_t)(retval / 100000);
+    int32_t retval = 94189 * (int32_t)m_steps_ambient - 22603000;
+    return (int16_t)(retval / 1000000);
   }
 
   int16_t heater_current() const {
@@ -432,14 +428,14 @@ public:
 
     int16_t tooltemp = context()->tool_temperature();
     char str_tooltemp[] = "000";
-    if (tooltemp >= 0) {
-      str_tooltemp[2] = (tooltemp % 10) + '0';
-      str_tooltemp[1] = ((tooltemp / 10) % 10) + '0';
-      str_tooltemp[0] = ((tooltemp / 100) % 10) + '0';
-    } else {
+    if (tooltemp < 0 || tooltemp > 999) {
       for (uint8_t i = 0; i < sizeof(str_tooltemp)-1; ++i) {
         str_tooltemp[i] = ':';
       }
+    } else {
+      str_tooltemp[2] = (tooltemp % 10) + '0';
+      str_tooltemp[1] = ((tooltemp / 10) % 10) + '0';
+      str_tooltemp[0] = ((tooltemp / 100) % 10) + '0';
     }
 
     int16_t ambient = context()->ambient();
