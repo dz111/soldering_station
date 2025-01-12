@@ -25,7 +25,7 @@ bool adc_is_converting() {
 //}
 
 void adc_set_destination(uint8_t channel, adc_dest_t destination) {
-  if (channel <= 8) {
+  if (channel <= NUM_ADC_CHANNELS) {
     adc_destinations[channel] = destination;
   }
 }

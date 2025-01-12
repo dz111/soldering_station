@@ -55,9 +55,9 @@ void io_init() {
   DDRC  = 0b00110000;
   DDRD  = 0b00001111;
   PORTB = 0b00111001;
-  PORTC = 0b00000100;
+  PORTC = 0b00000000;
   PORTD = 0b11111111;
-  DIDR0 = 0b00001011;
+  DIDR0 = 0b00001111;
 }
 
 #define BTN_FN1 (PIND & _BV(PD4))
@@ -66,6 +66,11 @@ void io_init() {
 #define BTN_DEC (PIND & _BV(PD7))
 #define PIN_SLEEP      (PINB & _BV(PB0))
 #define PIN_TOOLCHANGE (PINB & _BV(PB5))
+#define PIN_DEBUG      (PINB & _BV(PB3))
+#define ADC_THERMO  0
+#define ADC_CURRENT 1
+#define ADC_VOLTS   3
+#define ADC_AMBIENT 2
 //#define PIN_TOOLCHANGE (1)
 
 #endif  // BOARD_REV == 2
@@ -87,7 +92,11 @@ void io_init() {
 #define BTN_DEC (PORTD & _BV(PD5))
 #define PIN_SLEEP      (PINB & _BV(PB0))
 #define PIN_TOOLCHANGE (PIND & _BV(PD7));
-
+#define PIN_DEBUG      (PIND & _BV(PD6))
+#define ADC_THERMO  0
+#define ADC_CURRENT 1
+#define ADC_VOLTS   2
+#define ADC_AMBIENT 3
 #endif  // BOARD_REV == 3
 
 void pwm_init() {
@@ -231,12 +240,11 @@ void draw_power_meter(uint8_t duty) {
     oled_pixel(6, y, 1);
     oled_pixel(11, y, 1);
 
-    if (y == 0 || y == 43 || (44 - y - 2) < (duty * 42 / 100)) {
-      oled_pixel(7, y, 1);
-      oled_pixel(8, y, 1);
-      oled_pixel(9, y, 1);
-      oled_pixel(10, y, 1);
-    }
+    char pixel_value = (y == 0 || y == 43 || (44 - y - 2) < (duty * 42 / 100));
+    oled_pixel(7, y, pixel_value);
+    oled_pixel(8, y, pixel_value);
+    oled_pixel(9, y, pixel_value);
+    oled_pixel(10, y, pixel_value);
   }
 }
 
@@ -263,6 +271,13 @@ public:
   Context(State* state) : m_state(state) { }
   ~Context() { 
     delete m_state; 
+  }
+
+  void set_adc_pointers() {
+      adc_set_destination(ADC_THERMO,  &m_steps_thermo);
+      adc_set_destination(ADC_CURRENT, &m_steps_current);
+      adc_set_destination(ADC_VOLTS,   &m_steps_volts);
+      adc_set_destination(ADC_AMBIENT, &m_steps_ambient);
   }
   
   void transition(State* state) {
@@ -300,9 +315,102 @@ public:
     eeprom_read(&t, sizeof(t), 0);
     return t;
   }
+
+  int16_t tool_temperature() const {
+//    if (steps_thermo > TIP_DISCONNECTED) {
+//      thermo_status = 2;
+//    } else {
+      // TC characteristic after op-amp: 2.375mV/K
+      // adc 10-bits @ 5.00V, 4.883mV/step
+      // => 2.056K/step
+    int32_t thermocouple = (int32_t)m_steps_thermo * 2056;
+    thermocouple /= 100;
+    if ((thermocouple % 10) < 5) {
+      thermocouple = thermocouple / 10;
+    } else {
+      thermocouple = thermocouple / 10 + 1;
+    }
+    return ambient() + thermocouple;
+  }
+
+  int16_t ambient() const {
+    /*
+     * Kyocera NB20 Type M4 NTC thermistor
+     * 47k NTC + 47k resistor
+     * For T = [-10C, 50C]:
+     * T (C) = 96.45 * (TEMP/VREF) - 22.60
+     * T (C) = 1/100,000 * (9419 * steps - 2,260,300)
+     */
+    int32_t retval = 9419 * (int32_t)m_steps_ambient - 2260300;
+    return (int16_t)(retval / 100000);
+  }
+
+  int16_t heater_current() const {
+    // Returns heater current in milliamps
+    if (m_steps_current > 1020) return -1;  // saturated adc
+
+    int32_t retval =  (int32_t)m_steps_current * 9766;
+    return retval / 1000;
+  }
+
+  int16_t heater_volts() const {
+    // Returns heater voltage in millivolts
+    if (m_steps_volts > 1020) return -1;  // saturated adc
+#if BOARD_REV == 2
+    int32_t retval =  (int32_t)m_steps_volts * 24533;
+    return retval / 1000;
+#elif BOARD_REV == 3
+    int32_t retval =  (int32_t)m_steps_volts * 22949;
+    return retval / 1000;
+#else
+    return -1;
+#endif  // BOARD_REV
+  }
+
+  int16_t heater_power() const {
+    if (heater_volts() < 0 || heater_current() < 0) return -1;
+    // Returns heater power in watts
+    uint32_t power = (uint32_t)heater_volts() * (uint32_t)heater_current();
+    return power / 1000000;
+  }
+  
+  int16_t last_error = 0;
+  uint16_t power = 0;
+  uint16_t last_power = 0;
+  uint16_t ki = 6;
+  
+  void heat_controller() {
+    int16_t error = set_temperature() - tool_temperature();
+  
+    if (error < 0) {  // stop heating once set point exceeded
+      if (last_error > 0) {  // crossing above set point
+        last_power = power;
+      }
+      power = 0;
+    } else {
+      if (last_error < 0) {  // crossing below set point
+        power = last_power / 2;  // "take back half"
+      } else {  // already below set point
+        uint16_t margin_to_max = 0xffff - power;
+        uint16_t power_increment = ki * error;
+        if (power_increment > margin_to_max) {
+          power = 0xffff;
+        } else {
+          power += power_increment;
+        }
+      }
+    }
+  
+    //pwm_set(power >> 9);
+    last_error = error;
+  }
 private:
   State* m_state;
   int16_t m_set;
+  uint16_t m_steps_thermo;
+  uint16_t m_steps_current;
+  uint16_t m_steps_volts;
+  uint16_t m_steps_ambient;
 };
 
 class StateSleep;
@@ -314,21 +422,79 @@ class StateWorking : public State {
 public:
   ~StateWorking() override {}
   void draw(const ButtonStruct& btn) override {
-    uint8_t duty = 75;
+    uint8_t duty = (context()->power / 655u);
+//    String s = String(context()->power, DEC);
+//    usart_println(s.c_str());
 
     String str_setpoint = "SET ";
     str_setpoint += context()->set_temperature();
     str_setpoint += " C";
+
+    int16_t tooltemp = context()->tool_temperature();
+    char str_tooltemp[] = "000";
+    if (tooltemp >= 0) {
+      str_tooltemp[2] = (tooltemp % 10) + '0';
+      str_tooltemp[1] = ((tooltemp / 10) % 10) + '0';
+      str_tooltemp[0] = ((tooltemp / 100) % 10) + '0';
+    } else {
+      for (uint8_t i = 0; i < sizeof(str_tooltemp)-1; ++i) {
+        str_tooltemp[i] = ':';
+      }
+    }
+
+    int16_t ambient = context()->ambient();
+    char str_ambient[] = "+00C";
+    str_ambient[0] = (ambient == 0) ? ' ' : ((ambient > 0) ? '+' : '-');
+    if (ambient < 0) ambient = -ambient;
+    bool ambient_tens = (ambient >= 10) || (ambient <= -10);
+    str_ambient[1] = ambient_tens ? ((ambient / 10) % 10) + '0' : ' ';
+    str_ambient[2] = (ambient % 10) + '0';
     
     oled_string(37, 0, str_setpoint.c_str(), 12, 1);
-    oled_string(40, 16, "265", 32, 1);
+    oled_string(40, 16, str_tooltemp, 32, 1);
     oled_string_P(23, 54, PSTR("OFF"), 12, !(btn.fn1.is_pressed && !is_current_error()));
     oled_string_P(84, 54, PSTR("MENU"), 12, btn.fn2.is_pressed ? 0 : 1);
     oled_string_P(102, 20, PSTR("AMB"), 12, 1);
-    oled_string(99,  30, "+25C", 12, 1);
-    
+    oled_string(99,  30, str_ambient, 12, 1);
+
+    if (!PIN_DEBUG) {
+      char str_voltamps[] = "00.0V 0.0A";
+      int16_t volts = context()->heater_volts();
+      int16_t current = context()->heater_current();
+      if (volts < 0) {
+        for (uint8_t i = 0; i < 4; ++i) {
+          str_voltamps[i] = '-';
+        }
+      } else {
+        if (volts < 10000) str_voltamps[0] = ' ';
+        else str_voltamps[0] = ((volts / 10000) % 10) + '0';
+        str_voltamps[1] = ((volts / 1000) % 10) + '0';
+        str_voltamps[3] = ((volts / 100)  % 10) + '0';
+      }
+      if (current < 0 || current > 9999) {
+        for (int i = 6; i < 9; ++i) {
+          str_voltamps[i] = '-';
+        }
+      } else {
+        str_voltamps[6] = ((current / 1000) % 10) + '0';
+        str_voltamps[8] = ((current / 100)  % 10) + '0';
+      }
+      oled_string(26, 42, str_voltamps, 12, 1);
+    }
+
+    int16_t power = context()->heater_power();
+    char str_power[] = "000";
+    if (power < 0) {
+      for (uint8_t i = 0; i < sizeof(str_power)-1; ++i) {
+        str_power[i] = 'X';
+      }
+    } else {
+      str_power[0] = ((power / 100) % 10) + '0';
+      str_power[1] = ((power / 10)  % 10) + '0';
+      str_power[2] = (power % 10) + '0';
+    }
     //oled_string(3, 44, "80", 12, 1);
-    oled_string(0, 44, "120", 12, 1);
+    oled_string(0, 44, str_power, 12, 1);
 
     draw_power_meter(duty);
 
@@ -644,21 +810,18 @@ int main() {
     usart_print_P(PSTR("# Heap/stack size: "));
     usart_println(buf);
   }
+#if STACK_HWM
   print_stack_hwm();
+#endif  // STACK_HWM
 
   oled_clear();
   oled_display();
 
-  
-
-//  adc_set_destination(0, &steps_thermo);
-//  adc_set_destination(1, &steps_current);
-//  adc_set_destination(3, &steps_voltage);
-//  adc_set_destination(8, &steps_ambient);
 
   uint8_t last_error = 0;
 
   Context context;
+  context.set_adc_pointers();
   context.set_temperature(context.load_defaultset());
   uint8_t wdt_flag = eeprom_read(WDT_FLAG);
 //  if (wdt_flag == WDT_FLAG_TRUE) {
@@ -715,6 +878,8 @@ int main() {
         }
       }
     }
+
+    context.heat_controller();
 
     process_buttons(btn);
     context.update(btn);
