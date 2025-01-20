@@ -1,3 +1,12 @@
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#include <avr/interrupt.h>
+#include <avr/pgmspace.h>
+#include <avr/wdt.h>
+#include <util/delay.h>
+
 #define BOARD_REV 2
 #define STACK_HWM 0
 
@@ -45,9 +54,6 @@ void set_error_P(const char* str) {
 #include "usart.h"
 #include "userdata.h"
 #include "utils.h"
-
-#include <avr/wdt.h>
-
 
 #if BOARD_REV == 2
 void io_init() {
@@ -104,11 +110,11 @@ void pwm_init() {
  * The heater PWM operates on Timer 1 (16-bit) and outputs
  * onto pin 15/OC1A/PB1. The data direction register (DDR)
  * for this pin is set in the main initialisation.
- * 
+ *
  * We use the Fast PWM mode here--the counter is incremented
- * from 0 to TOP. The output is set LOW when the counter 
+ * from 0 to TOP. The output is set LOW when the counter
  * overflows TOP and set HIGH when the counter equals OCR1A.
- * 
+ *
  * The counter increments at a rate of f_cpu / N (eg
  * 16 MHz / 8 = 2 MHz). The PWM frequency is this rate divided
  * by (TOP + 1), eg with TOP=127, f_pwm = 15,625 Hz.
@@ -137,7 +143,7 @@ void timer_init() {
  * heater to allow the thermocouple to be read. Once the
  * heater is switched off, sufficient time must be given
  * for the current sense amplifier to recover before reading.
- * 
+ *
  * The counter increments from 0 to 255. When the counter
  * overflows 255, the OVF interrupt is triggered and the
  * relevant ISR switches off the heater. When the counter
@@ -145,14 +151,14 @@ void timer_init() {
  * relevant ISR reads the thermocouple, calls the heater
  * control to set the PWM duty cycle and switches on the
  * heater.
- * 
+ *
  * The effect of the above is that during the period
  * between 0 and OCR0A, the heater is off and the current
  * sense amplifier is recovering; between OCR0A and 255,
  * the heater is on. The effective heater power is factored
  * by (OCR0A + 1) / 256. So OCR0A should be reduced to the
  * minimum value that allows reliable temperature measurement.
- * 
+ *
  * The counter increments at a rate of f_cpu / N (eg
  * 16 MHz / 1024 = 15,625 Hz or 64 us per step). The full cycle
  * is this rated divided by 256 (eg approx 61 Hz or a period of
@@ -192,7 +198,7 @@ ISR(TIMER2_COMPA_vect) {
 void wdt_init(uint8_t prescale) {
   cli();
   wdt_reset();
-  
+
   WDTCSR = _BV(WDE) | _BV(WDIE) | _BV(WDCE);
   WDTCSR = _BV(WDE) | _BV(WDIE) | (prescale & 0b0111) | ((prescale & 0b1000) << 2);
 
@@ -269,8 +275,8 @@ class Context {
 public:
   Context() : m_state(nullptr) { }
   Context(State* state) : m_state(state) { }
-  ~Context() { 
-    delete m_state; 
+  ~Context() {
+    delete m_state;
   }
 
   void set_adc_pointers() {
@@ -279,7 +285,7 @@ public:
       adc_set_destination(ADC_VOLTS,   &m_steps_volts);
       adc_set_destination(ADC_AMBIENT, &m_steps_ambient);
   }
-  
+
   void transition(State* state) {
     delete m_state;
     m_state = state;
@@ -369,15 +375,15 @@ public:
     uint32_t power = (uint32_t)heater_volts() * (uint32_t)heater_current();
     return power / 1000000;
   }
-  
+
   int16_t last_error = 0;
   uint16_t power = 0;
   uint16_t last_power = 0;
   uint16_t ki = 6;
-  
+
   void heat_controller() {
     int16_t error = set_temperature() - tool_temperature();
-  
+
     if (error < 0) {  // stop heating once set point exceeded
       if (last_error > 0) {  // crossing above set point
         last_power = power;
@@ -396,7 +402,7 @@ public:
         }
       }
     }
-  
+
     //pwm_set(power >> 9);
     last_error = error;
   }
@@ -422,9 +428,9 @@ public:
 //    String s = String(context()->power, DEC);
 //    usart_println(s.c_str());
 
-    String str_setpoint = "SET ";
-    str_setpoint += context()->set_temperature();
-    str_setpoint += " C";
+    util::string16 str_setpoint = "SET ";
+    str_setpoint.append(context()->set_temperature());
+    str_setpoint.append(" C");
 
     int16_t tooltemp = context()->tool_temperature();
     char str_tooltemp[] = "000";
@@ -445,7 +451,7 @@ public:
     bool ambient_tens = (ambient >= 10) || (ambient <= -10);
     str_ambient[1] = ambient_tens ? ((ambient / 10) % 10) + '0' : ' ';
     str_ambient[2] = (ambient % 10) + '0';
-    
+
     oled_string(37, 0, str_setpoint.c_str(), 12, 1);
     oled_string(40, 16, str_tooltemp, 32, 1);
     oled_string_P(23, 54, PSTR("OFF"), 12, !(btn.fn1.is_pressed && !is_current_error()));
@@ -534,7 +540,7 @@ public:
     oled_string_P(84, 54, PSTR("MENU"), 12, !btn.fn2.is_pressed);
     oled_string_P(102, 20, PSTR("AMB"), 12, 1);
     oled_string(99,  30, "+25C", 12, 1);
-    
+
     //oled_string(3, 44, "80", 12, 1);
     oled_string(6, 44, "5", 12, 1);
 
@@ -638,23 +644,23 @@ public:
     }
 
     if (m_item < 3) {
-      String str;
-      
+      util::string16 str;
+
       str = "";
-      str += m_defaultset;
-      str += " C";
+      str.append(m_defaultset);
+      str.append(" C");
       oled_string_P(0, 16, PSTR("DEFAULT"), 12, !(m_item == 0 && !editing));
       oled_string(98, 16, str.c_str(), 12, !(m_item == 0 && editing));
 
       str = "";
-      str += m_sleepset;
-      str += " C";
+      str.append(m_sleepset);
+      str.append(" C");
       oled_string_P(0, 28, PSTR("SLEEP"), 12, !(m_item == 1 && !editing));
       oled_string(98, 28, str.c_str(), 12, !(m_item == 1 && editing));
 
       str = "";
-      str += m_offtime;
-      str += " MIN";
+      str.append(m_offtime);
+      str.append(" MIN");
       oled_string_P(0, 40, PSTR("OFF TIME"), 12, !(m_item == 2 && !editing));
       oled_string(92, 40, str.c_str(), 12, !(m_item == 2 && editing));
     } else {
@@ -667,7 +673,7 @@ public:
         editing = false;
         oled_clear();
       }
-      
+
       if (btn.dec.on_press) {
         switch (m_item) {
         case 0:
@@ -784,7 +790,8 @@ int main() {
   fill_canaries();
 #endif  // STACK_HWM
 
-  usart_init(3);
+  usart_init(3);  // 250 kbps
+  //usart_init(103);  // 9600 bps
   usart_print_P(PSTR("\nSoldering Station 245\n"));
 
   io_init();
@@ -830,13 +837,22 @@ int main() {
   if (wdt_flag != WDT_FLAG_FALSE) {
     eeprom_write(WDT_FLAG, WDT_FLAG_FALSE);
   }
-  
+
   //wdt_init(WDTO_60MS);
   wdt_init(WDTO_2S);
-  
+
   adc_start();
 
-  String serial_input_buffer;
+  util::string16 serial_input_buffer;
+  serial_input_buffer.append('T');
+  serial_input_buffer.append('E');
+  serial_input_buffer.append('S');
+  serial_input_buffer.append('T');
+  serial_input_buffer.append('I');
+  serial_input_buffer.append('N');
+  serial_input_buffer.append('G');
+  usart_println(serial_input_buffer.c_str());
+  serial_input_buffer.clear();
 
   ButtonStruct btn;
 
@@ -845,7 +861,7 @@ int main() {
   uint8_t i = 0;
   while (1) {
     wdt_reset();
-    
+
     if (last_error != error_count) {
       if (is_current_error()) {
         usart_print_P(PSTR("# Error: "));
@@ -855,22 +871,23 @@ int main() {
     }
 
     if (!usart_busy()) {
+      //@TODO: Prohibit excessively long inputs
       uint8_t ch;
       while ((ch = usart_rx())) {
         if (ch == '\r' || ch == '\n') {
-          String command = serial_input_buffer;
-          command.toUpperCase();
-          if (command == "SS") {
+          util::string16 command = serial_input_buffer;
+          serial_input_buffer.to_uppercase();
+          if (serial_input_buffer == "SS") {
             usart_send_oled();
-            //while(usart_busy());
+            while(usart_busy());
           } else {
             usart_print_P(PSTR("ERR unknown command: "));
             usart_println(serial_input_buffer.c_str());
             usart_print_P(PSTR("RDY\n"));
           }
-          serial_input_buffer = "";
-        } else {
-          serial_input_buffer += (char)ch;
+          serial_input_buffer.clear();
+        } else if (ch >= ' ' && ch <= '~') {
+          serial_input_buffer.append((char)ch);
         }
       }
     }
@@ -1051,14 +1068,14 @@ ISR(PCINT0_vect) {
 //
 //  int8_t ts_offset = boot_signature_byte_get(TS_OFFSET);
 //  uint8_t ts_gain   = boot_signature_byte_get(TS_GAIN);
-//  
+//
 //  Serial.begin(9600);
 //  Serial.println("Soldering station debug");
 //  Serial.println("David Zhong 2023");
-//  
+//
 //  DDRB = _BV(DDB1);   // Set HEATER_PWM as output
 //  //PORTB = _BV(DDB0);  // Set pull-up resistor for SLEEP
-//  
+//
 //  DDRD = 0b00001111;  // Set PD0:3 as output; PD4:7 as input
 //  PORTD = _BV(DDD0);  // Set PD0 on to indicate power up
 //
@@ -1070,7 +1087,7 @@ ISR(PCINT0_vect) {
 //  Serial.print("Init two wire interface..."); Serial.flush();
 //  twi_init();
 //  Serial.print("  ok\nInit OLED..."); Serial.flush();
-// 
+//
 //  oled_init();
 //
 //  Serial.print("  ok\nSwitch on display..."); Serial.flush();
@@ -1082,11 +1099,11 @@ ISR(PCINT0_vect) {
 //  oled_clear();
 //  oled_display();
 //  /* display images of bitmap matrix */
-////  oled_bitmap(0, 2, Signal816, 16, 8); 
-////  oled_bitmap(24, 2,Bluetooth88, 8, 8); 
-////  oled_bitmap(40, 2, Msg816, 16, 8); 
-////  oled_bitmap(64, 2, GPRS88, 8, 8); 
-////  oled_bitmap(90, 2, Alarm88, 8, 8); 
+////  oled_bitmap(0, 2, Signal816, 16, 8);
+////  oled_bitmap(24, 2,Bluetooth88, 8, 8);
+////  oled_bitmap(40, 2, Msg816, 16, 8);
+////  oled_bitmap(64, 2, GPRS88, 8, 8);
+////  oled_bitmap(90, 2, Alarm88, 8, 8);
 ////  oled_bitmap(112, 2, Bat816, 16, 8);
 //
 //  // Arduino UNO bootloader sets MCUSR to 0 :( :( :(
@@ -1098,26 +1115,26 @@ ISR(PCINT0_vect) {
 //  Serial.print("MCUSR: "); Serial.print(mcu, BIN); Serial.println();
 //
 ////  if (mcu & _BV(WDRF)) {
-////    oled_string(10, 52, "WATCHDOG RESET", 12, 1); 
+////    oled_string(10, 52, "WATCHDOG RESET", 12, 1);
 ////  } else {
-////    oled_string(10, 52, "NO WARNINGS", 12, 1); 
+////    oled_string(10, 52, "NO WARNINGS", 12, 1);
 ////  }
 //
 //  adc_set_destination(0, &steps_thermo);
 //  adc_set_destination(1, &steps_current);
 //  adc_set_destination(3, &steps_voltage);
 //  adc_set_destination(8, &steps_ambient);
-// 
+//
 //  wdt_init();
 //  adc_start();
 //
 //  uint8_t counter = 0;
-//  
+//
 //
 //  while (1) {
 //    wdt_reset();
 //    //if (!adc_is_converting()) adc_start();
-//    
+//
 //    //Serial.print("Steps: "); Serial.print(steps, DEC); Serial.print("\n");
 //    //uint32_t voltage = ((uint32_t)steps * 2452 / 10);  //
 //
@@ -1184,8 +1201,8 @@ ISR(PCINT0_vect) {
 //      for (uint8_t i = 0; i < 8; ++i) {
 //        debug4[i] = steps4_s[i];
 //      }
-//      
-//      oled_string(10, 52, lower, 12, 1); 
+//
+//      oled_string(10, 52, lower, 12, 1);
 //      oled_string(104, 24, amb, 12, 1);
 //      oled_string(0, 0, debug1, 12, 1);
 //      oled_string(0, 12, debug2, 12, 1);
@@ -1205,14 +1222,14 @@ ISR(PCINT0_vect) {
 //      default:
 //        break;
 //      }
-//  
+//
 ////      oled_char3216(0, 16, (hundthousands + 48));
 ////      oled_char3216(24, 16, steps1_s[2]);
 ////      oled_char3216(40, 16, steps1_s[3]);
 ////      oled_char3216(56, 16, steps1_s[4]);
 ////      oled_char3216(72, 16, 'C');
 ////      oled_char3216(96, 16, (ones + 48));
-//      
+//
 //      oled_display();
 //
 //      counter++;

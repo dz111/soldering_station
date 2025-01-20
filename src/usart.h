@@ -99,13 +99,12 @@ bool usart_busy() {
 }
 
 void usart_send_oled() {
-  uint32_t len = sizeof(oled_buf) / sizeof(*oled_buf);
-  String meta = "$";
-  meta += len;
-  meta += "\n";
-  usart_print(meta.c_str());
+  int16_t len = sizeof(oled_buf) / sizeof(*oled_buf);
+  util::string16 meta = "$";
+  meta.append(len);
+  usart_println(meta.c_str());
   _usart_cp = oled_buf;
-  
+
 }
 
 ISR(USART_UDRE_vect) {
@@ -123,6 +122,6 @@ ISR(USART_UDRE_vect) {
     }
     return;
   }
-  
+
   _usart_interrupt_disable();
 }
